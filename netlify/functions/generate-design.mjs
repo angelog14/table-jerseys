@@ -5,7 +5,7 @@ function json(data, status = 200) {
   });
 }
 
-async function makeImage(apiKey, prompt, size = '1536x1024', quality = 'medium') {
+async function makeImage(apiKey, prompt) {
   const res = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST',
     headers: {
@@ -15,19 +15,19 @@ async function makeImage(apiKey, prompt, size = '1536x1024', quality = 'medium')
     body: JSON.stringify({
       model: 'gpt-image-2',
       prompt,
-      size,
-      quality,
-      output_format: 'jpeg',
-      output_compression: 82
+      size: '1024x1024',
+      quality: 'low',
+      output_format: 'jpeg'
     })
   });
 
   const raw = await res.text();
-  let data = {};
+
+  let data;
   try {
     data = JSON.parse(raw);
   } catch {
-    throw new Error(`OpenAI returned a non-JSON response: ${raw.slice(0, 180)}`);
+    throw new Error(`OpenAI returned invalid response: ${raw.slice(0, 200)}`);
   }
 
   if (!res.ok) {
@@ -35,6 +35,7 @@ async function makeImage(apiKey, prompt, size = '1536x1024', quality = 'medium')
   }
 
   const b64 = data?.data?.[0]?.b64_json;
+
   if (!b64) {
     throw new Error('OpenAI returned no image data.');
   }
@@ -48,58 +49,76 @@ export default async (req) => {
   }
 
   const apiKey = process.env.OPENAI_API_KEY;
+
   if (!apiKey) {
-    return json({ error: 'OPENAI_API_KEY is not configured in Netlify.' }, 500);
+    return json(
+      { error: 'OPENAI_API_KEY is not configured in Netlify.' },
+      500
+    );
   }
 
   try {
-    const { prompt = '', project = '', revision = 1 } = await req.json();
+    const {
+      prompt = '',
+      project = '',
+      revision = 1
+    } = await req.json();
 
-    const customer = String(prompt).trim();
-    const name = String(project || '').trim();
-
-    if (!customer) {
-      return json({ error: 'A design prompt is required.' }, 400);
+    if (!String(prompt).trim()) {
+      return json(
+        { error: 'A design prompt is required.' },
+        400
+      );
     }
 
-    const common = [
-      'You are creating flat print artwork for a fitted 6-foot event table cover used for dye sublimation.',
-      'The private 2D sew pattern is the manufacturing source of truth. Your task is artwork only.',
-      'Do NOT render a table, room, fabric folds, perspective, people, floor, shadows outside the artwork, mockups, panel labels, dimensions, crop marks, or sewing marks.',
-      'Create edge-to-edge premium textile artwork. The customer will view it mapped live to a 3D fitted-cover model.',
-      'Photorealistic textures are allowed when requested.',
-      'Any important logo or wording must be clear and intentional. Do not invent extra brand copy.',
-      name ? `Project: ${name}.` : '',
-      `Customer direction: ${customer}`
-    ].filter(Boolean).join('\n');
+    const imagePrompt = `
+Create flat print artwork for a fitted 6-foot event table cover.
 
-    const frontPrompt = `${common}
-FRONT PANEL ARTWORK. Physical panel: 72 x 29 inches, wide landscape. This is the hero face. Honor all requested front-only branding and imagery. Keep the composition readable from several feet away. Fill the whole image to the edges.`;
+Project:
+${project}
 
-    const topPrompt = `${common}
-TOP PANEL ARTWORK. Physical panel: 72 x 30 inches, wide landscape viewed from overhead. Make the top visually coherent with the front. Do not repeat front-only branding unless requested. Fill the whole image to the edges.`;
+Customer direction:
+${prompt}
 
-    const wrapPrompt = `${common}
-WRAP SURFACE ARTWORK used on LEFT, RIGHT, and BACK in this MVP. Make a cohesive secondary/background treatment that can repeat cleanly around these vertical surfaces. Avoid required text unless the customer explicitly asks for it on all wrap surfaces. Fill the whole image to the edges.`;
+This is textile artwork only.
 
-    const quality = process.env.OPENAI_IMAGE_QUALITY || 'medium';
+Do not render:
+- a table
+- a room
+- people
+- fabric folds
+- a mockup
+- dimensions
+- sewing marks
+- crop marks
 
-    const [frontBase64, topBase64, wrapBase64] = await Promise.all([
-      makeImage(apiKey, frontPrompt, '1536x1024', quality),
-      makeImage(apiKey, topPrompt, '1536x1024', quality),
-      makeImage(apiKey, wrapPrompt, '1536x1024', quality)
-    ]);
+Create edge-to-edge artwork with a strong hero composition.
+
+Important logos or wording should be readable and intentional.
+
+This is a temporary MVP test image that will be mapped onto the 3D table-cover visualizer.
+`;
+
+    const imageBase64 = await makeImage(apiKey, imagePrompt);
 
     return json({
       ok: true,
       revision: Number(revision) || 1,
-      frontBase64,
-      topBase64,
-      wrapBase64,
+
+      // TEMPORARY MVP TEST:
+      // same generated image drives all surfaces
+      frontBase64: imageBase64,
+      topBase64: imageBase64,
+      wrapBase64: imageBase64,
+
       mimeType: 'image/jpeg',
       generator: 'gpt-image-2'
     });
+
   } catch (err) {
-    return json({ error: err?.message || 'Unexpected generation error.' }, 500);
+    return json(
+      { error: err?.message || 'Unexpected generation error.' },
+      500
+    );
   }
 };
